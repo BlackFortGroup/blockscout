@@ -1,10 +1,5 @@
 <h1 align="center">BlockScout</h1>
 <p align="center">Blockchain Explorer for inspecting and analyzing EVM Chains.</p>
-<div align="center">
-
-[![Blockscout](https://github.com/blockscout/blockscout/workflows/Blockscout/badge.svg?branch=master)](https://github.com/blockscout/blockscout/actions) 
-
-</div>
 
 BlockScout provides a comprehensive, easy-to-use interface for users to view, confirm, and inspect transactions on EVM (Ethereum Virtual Machine) blockchains. This includes the POA Network, Gnosis Chain, Ethereum Classic and other **Ethereum testnets, private networks and sidechains**.
 
@@ -39,6 +34,16 @@ See the [project documentation](https://docs.blockscout.com/) for instructions:
 ## Acknowledgements
 
 We would like to thank the [EthPrize foundation](http://ethprize.io/) for their funding support.
+
+## Build custom docker container
+
+Before build you need to be authorized to push images to GCR!
+
+Latest stable version I found is 4.1.5, so we stay with that version, but to be sure that image is updated on server, we use tag "latest"
+
+```
+docker buildx build -t eu.gcr.io/blackfort-exchange/blockscout:latest -f ./docker/Dockerfile --push --platform=linux/amd64 .
+```
 
 ## Contributing
 
