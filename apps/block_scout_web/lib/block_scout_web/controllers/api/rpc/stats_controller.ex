@@ -3,6 +3,7 @@ defmodule BlockScoutWeb.API.RPC.StatsController do
 
   use Explorer.Schema
 
+  alias Explorer
   alias Explorer.{Chain, Etherscan, ExchangeRates}
   alias Explorer.Chain.Cache.{AddressSum, AddressSumMinusBurnt}
   alias Explorer.Chain.Wei
@@ -45,7 +46,7 @@ defmodule BlockScoutWeb.API.RPC.StatsController do
     cached_coin_total_supply_wei = AddressSumMinusBurnt.get_sum_minus_burnt()
 
     coin_total_supply_wei =
-      if Decimal.cmp(cached_coin_total_supply_wei, 0) == :gt do
+      if Decimal.compare(cached_coin_total_supply_wei, 0) == :gt do
         cached_coin_total_supply_wei
       else
         Chain.get_last_fetched_counter("sum_coin_total_supply_minus_burnt")
@@ -60,7 +61,7 @@ defmodule BlockScoutWeb.API.RPC.StatsController do
   end
 
   def coinprice(conn, _params) do
-    symbol = Application.get_env(:explorer, :coin)
+    symbol = Explorer.coin()
     rates = ExchangeRates.lookup(symbol)
 
     render(conn, "coinprice.json", rates: rates)

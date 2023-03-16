@@ -9,10 +9,13 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
   alias Ecto.Adapters.SQL
   alias Ecto.{Changeset, Multi, Repo}
   alias Explorer.Chain.{Block, Hash, Import, InternalTransaction, PendingBlockOperation, Transaction}
+  alias Explorer.Chain.Events.Publisher
   alias Explorer.Chain.Import.Runner
+  alias Explorer.Prometheus.Instrumenter
   alias Explorer.Repo, as: ExplorerRepo
+  alias Explorer.Utility.MissingBlockRange
 
-  import Ecto.Query, only: [from: 2, or_where: 3]
+  import Ecto.Query, only: [from: 2]
 
   @behaviour Runner
 
@@ -54,26 +57,53 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
     # Enforce ShareLocks tables order (see docs: sharelocks.md)
     multi
     |> Multi.run(:acquire_blocks, fn repo, _ ->
-      acquire_blocks(repo, changes_list)
+      Instrumenter.block_import_stage_runner(
+        fn -> acquire_blocks(repo, changes_list) end,
+        :block_pending,
+        :internal_transactions,
+        :acquire_blocks
+      )
     end)
     |> Multi.run(:acquire_pending_internal_txs, fn repo, %{acquire_blocks: block_hashes} ->
-      acquire_pending_internal_txs(repo, block_hashes)
+      Instrumenter.block_import_stage_runner(
+        fn -> acquire_pending_internal_txs(repo, block_hashes) end,
+        :block_pending,
+        :internal_transactions,
+        :acquire_pending_internal_txs
+      )
     end)
     |> Multi.run(:acquire_transactions, fn repo, %{acquire_pending_internal_txs: pending_block_hashes} ->
-      acquire_transactions(repo, pending_block_hashes)
+      Instrumenter.block_import_stage_runner(
+        fn -> acquire_transactions(repo, pending_block_hashes) end,
+        :block_pending,
+        :internal_transactions,
+        :acquire_transactions
+      )
     end)
     |> Multi.run(:invalid_block_numbers, fn _, %{acquire_transactions: transactions} ->
-      invalid_block_numbers(transactions, internal_transactions_params)
+      Instrumenter.block_import_stage_runner(
+        fn -> invalid_block_numbers(transactions, internal_transactions_params) end,
+        :block_pending,
+        :internal_transactions,
+        :invalid_block_numbers
+      )
     end)
     |> Multi.run(:valid_internal_transactions, fn _,
                                                   %{
                                                     acquire_transactions: transactions,
                                                     invalid_block_numbers: invalid_block_numbers
                                                   } ->
-      valid_internal_transactions(
-        transactions,
-        internal_transactions_params,
-        invalid_block_numbers
+      Instrumenter.block_import_stage_runner(
+        fn ->
+          valid_internal_transactions(
+            transactions,
+            internal_transactions_params,
+            invalid_block_numbers
+          )
+        end,
+        :block_pending,
+        :internal_transactions,
+        :valid_internal_transactions
       )
     end)
     |> Multi.run(:valid_internal_transactions_without_first_traces_of_trivial_transactions, fn _,
@@ -81,35 +111,58 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
                                                                                                  valid_internal_transactions:
                                                                                                    valid_internal_transactions
                                                                                                } ->
-      valid_internal_transactions_without_first_trace(valid_internal_transactions)
-    end)
-    |> Multi.run(:remove_left_over_internal_transactions, fn repo,
-                                                             %{valid_internal_transactions: valid_internal_transactions} ->
-      remove_left_over_internal_transactions(repo, valid_internal_transactions)
+      Instrumenter.block_import_stage_runner(
+        fn -> valid_internal_transactions_without_first_trace(valid_internal_transactions) end,
+        :block_pending,
+        :internal_transactions,
+        :valid_internal_transactions_without_first_traces_of_trivial_transactions
+      )
     end)
     |> Multi.run(:internal_transactions, fn repo,
                                             %{
                                               valid_internal_transactions_without_first_traces_of_trivial_transactions:
                                                 valid_internal_transactions_without_first_traces_of_trivial_transactions
                                             } ->
-      insert(repo, valid_internal_transactions_without_first_traces_of_trivial_transactions, insert_options)
+      Instrumenter.block_import_stage_runner(
+        fn ->
+          insert(repo, valid_internal_transactions_without_first_traces_of_trivial_transactions, insert_options)
+        end,
+        :block_pending,
+        :internal_transactions,
+        :internal_transactions
+      )
     end)
     |> Multi.run(:update_transactions, fn repo,
                                           %{
                                             valid_internal_transactions: valid_internal_transactions,
                                             acquire_transactions: transactions
                                           } ->
-      update_transactions(repo, valid_internal_transactions, transactions, update_transactions_options)
+      Instrumenter.block_import_stage_runner(
+        fn -> update_transactions(repo, valid_internal_transactions, transactions, update_transactions_options) end,
+        :block_pending,
+        :internal_transactions,
+        :update_transactions
+      )
     end)
     |> Multi.run(:remove_consensus_of_invalid_blocks, fn repo, %{invalid_block_numbers: invalid_block_numbers} ->
-      remove_consensus_of_invalid_blocks(repo, invalid_block_numbers)
+      Instrumenter.block_import_stage_runner(
+        fn -> remove_consensus_of_invalid_blocks(repo, invalid_block_numbers) end,
+        :block_pending,
+        :internal_transactions,
+        :remove_consensus_of_invalid_blocks
+      )
     end)
     |> Multi.run(:update_pending_blocks_status, fn repo,
                                                    %{
                                                      acquire_pending_internal_txs: pending_block_hashes,
                                                      remove_consensus_of_invalid_blocks: invalid_block_hashes
                                                    } ->
-      update_pending_blocks_status(repo, pending_block_hashes, invalid_block_hashes)
+      Instrumenter.block_import_stage_runner(
+        fn -> update_pending_blocks_status(repo, pending_block_hashes, invalid_block_hashes) end,
+        :block_pending,
+        :internal_transactions,
+        :update_pending_blocks_status
+      )
     end)
   end
 
@@ -125,11 +178,14 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
     internal_transactions_params = Enum.filter(changes_list, &Map.has_key?(&1, :type))
 
     # Enforce ShareLocks tables order (see docs: sharelocks.md)
-    Multi.new()
-    |> Multi.run(:internal_transactions, fn repo, _ ->
-      insert(repo, internal_transactions_params, insert_options)
-    end)
-    |> ExplorerRepo.transaction()
+    with {:ok, data} <-
+           Multi.new()
+           |> Multi.run(:internal_transactions, fn repo, _ ->
+             insert(repo, internal_transactions_params, insert_options)
+           end)
+           |> ExplorerRepo.transaction() do
+      Publisher.broadcast(data, :on_demand)
+    end
   end
 
   @impl Runner
@@ -241,7 +297,6 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
       from(
         pending_ops in PendingBlockOperation,
         where: pending_ops.block_hash in ^block_hashes,
-        where: pending_ops.fetch_internal_transactions,
         select: pending_ops.block_hash,
         # Enforce PendingBlockOperation ShareLocks order (see docs: sharelocks.md)
         order_by: [asc: pending_ops.block_hash],
@@ -333,8 +388,8 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
     json_rpc_named_arguments = Application.fetch_env!(:indexer, :json_rpc_named_arguments)
     variant = Keyword.fetch!(json_rpc_named_arguments, :variant)
 
-    # we exclude first traces from storing in the DB only in case of Parity variant (Parity/Nethermind). Todo: implement the same for Geth
-    if variant == EthereumJSONRPC.Parity do
+    # we exclude first traces from storing in the DB only in case of Nethermind variant (Nethermind/OpenEthereum). Todo: implement the same for Geth
+    if variant == EthereumJSONRPC.Nethermind do
       valid_internal_transactions_without_first_trace =
         valid_internal_transactions
         |> Enum.reject(fn trace ->
@@ -353,42 +408,6 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
     # This allows us to use a more efficient upserting logic, while keeping the
     # uniqueness valid.
     SQL.query(repo, "SET CONSTRAINTS internal_transactions_pkey DEFERRED")
-  end
-
-  def remove_left_over_internal_transactions(repo, valid_internal_transactions) do
-    # Removes internal transactions that were part of a block before a refetch
-    # and have not been upserted with new ones (if any exist).
-
-    case valid_internal_transactions do
-      [] ->
-        {:ok, []}
-
-      _ ->
-        try do
-          delete_query_for_block_hash_block_index =
-            valid_internal_transactions
-            |> Enum.group_by(& &1.block_hash, & &1.block_index)
-            |> Enum.map(fn {block_hash, indexes} -> {block_hash, Enum.max(indexes)} end)
-            |> Enum.reduce(InternalTransaction, fn {block_hash, max_index}, acc ->
-              or_where(acc, [it], it.block_hash == ^block_hash and it.block_index > ^max_index)
-            end)
-
-          # removes old records with the same primary key (transaction hash, transaction index)
-          delete_query =
-            valid_internal_transactions
-            |> Enum.map(fn params -> {params.transaction_hash, params.index} end)
-            |> Enum.reduce(delete_query_for_block_hash_block_index, fn {transaction_hash, index}, acc ->
-              or_where(acc, [it], it.transaction_hash == ^transaction_hash and it.index == ^index)
-            end)
-
-          # ShareLocks order already enforced by `acquire_pending_internal_txs` (see docs: sharelocks.md)
-          {count, result} = repo.delete_all(delete_query, [])
-
-          {:ok, {count, result}}
-        rescue
-          postgrex_error in Postgrex.Error -> {:error, %{exception: postgrex_error}}
-        end
-    end
   end
 
   defp update_transactions(repo, valid_internal_transactions, transactions, %{
@@ -625,6 +644,8 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
       try do
         {_num, result} = repo.update_all(update_query, [])
 
+        MissingBlockRange.add_ranges_by_block_numbers(invalid_block_numbers)
+
         Logger.debug(fn ->
           [
             "consensus removed from blocks with numbers: ",
@@ -657,7 +678,7 @@ defmodule Explorer.Chain.Import.Runner.InternalTransactions do
       )
 
     try do
-      # ShreLocks order already enforced by `acquire_pending_internal_txs` (see docs: sharelocks.md)
+      # ShareLocks order already enforced by `acquire_pending_internal_txs` (see docs: sharelocks.md)
       {_count, deleted} = repo.delete_all(delete_query, [])
 
       {:ok, deleted}

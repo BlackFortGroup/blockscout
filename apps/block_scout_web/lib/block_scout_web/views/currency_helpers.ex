@@ -13,7 +13,13 @@ defmodule BlockScoutWeb.CurrencyHelpers do
       iex> BlockScoutWeb.CurrencyHelpers.format_integer_to_currency(1000000)
       "1,000,000"
   """
-  @spec format_integer_to_currency(non_neg_integer()) :: String.t()
+  @spec format_integer_to_currency(non_neg_integer() | nil) :: String.t()
+  def format_integer_to_currency(value)
+
+  def format_integer_to_currency(nil) do
+    "-"
+  end
+
   def format_integer_to_currency(value) do
     {:ok, formatted} = Number.to_string(value, format: "#,##0")
 
@@ -69,7 +75,7 @@ defmodule BlockScoutWeb.CurrencyHelpers do
 
   @spec format_according_to_decimals(Decimal.t(), Decimal.t()) :: String.t()
   def format_according_to_decimals(value, decimals) do
-    if Decimal.cmp(decimals, 24) == :gt do
+    if Decimal.compare(decimals, 24) == :gt do
       format_according_to_decimals(value, Decimal.new(18))
     else
       value

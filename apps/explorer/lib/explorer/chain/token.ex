@@ -32,12 +32,11 @@ defmodule Explorer.Chain.Token do
   * `total_supply` - The total supply of the token
   * `decimals` - Number of decimal places the token can be subdivided to
   * `type` - Type of token
-  * `calatoged` - Flag for if token information has been cataloged
+  * `cataloged` - Flag for if token information has been cataloged
   * `contract_address` - The `t:Address.t/0` of the token's contract
   * `contract_address_hash` - Address hash foreign key
   * `holder_count` - the number of `t:Explorer.Chain.Address.t/0` (except the burn address) that have a
     `t:Explorer.Chain.CurrentTokenBalance.t/0` `value > 0`.  Can be `nil` when data not migrated.
-  * `bridged` - Flag for bridged tokens from other chain
   """
   @type t :: %Token{
           name: String.t(),
@@ -49,8 +48,8 @@ defmodule Explorer.Chain.Token do
           contract_address: %Ecto.Association.NotLoaded{} | Address.t(),
           contract_address_hash: Hash.Address.t(),
           holder_count: non_neg_integer() | nil,
-          bridged: boolean(),
-          skip_metadata: boolean()
+          skip_metadata: boolean(),
+          total_supply_updated_at_block: non_neg_integer() | nil
         }
 
   @derive {Poison.Encoder,
@@ -78,8 +77,8 @@ defmodule Explorer.Chain.Token do
     field(:type, :string)
     field(:cataloged, :boolean)
     field(:holder_count, :integer)
-    field(:bridged, :boolean)
     field(:skip_metadata, :boolean)
+    field(:total_supply_updated_at_block, :integer)
 
     belongs_to(
       :contract_address,
@@ -94,7 +93,7 @@ defmodule Explorer.Chain.Token do
   end
 
   @required_attrs ~w(contract_address_hash type)a
-  @optional_attrs ~w(cataloged decimals name symbol total_supply bridged skip_metadata)a
+  @optional_attrs ~w(cataloged decimals name symbol total_supply skip_metadata total_supply_updated_at_block updated_at)a
 
   @doc false
   def changeset(%Token{} = token, params \\ %{}) do

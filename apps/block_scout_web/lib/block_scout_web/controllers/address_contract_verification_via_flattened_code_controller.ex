@@ -46,15 +46,8 @@ defmodule BlockScoutWeb.AddressContractVerificationViaFlattenedCodeController do
           "external_libraries" => external_libraries
         }
       ) do
-    Que.add(PublisherWorker, {smart_contract["address_hash"], smart_contract, external_libraries, conn})
+    Que.add(PublisherWorker, {"flattened", smart_contract, external_libraries, conn})
 
     send_resp(conn, 204, "")
-  end
-
-  def parse_optimization_runs(%{"runs" => runs}) do
-    case Integer.parse(runs) do
-      {integer, ""} -> integer
-      _ -> 200
-    end
   end
 end

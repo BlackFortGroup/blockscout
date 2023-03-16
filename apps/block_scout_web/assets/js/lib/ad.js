@@ -1,5 +1,5 @@
 import $ from 'jquery'
-import customAds from './custom_ad'
+import customAds from './custom_ad.json'
 
 function countImpressions (impressionUrl) {
   if (impressionUrl) {
@@ -9,7 +9,7 @@ function countImpressions (impressionUrl) {
 
 function showAd () {
   const domainName = window.location.hostname
-  if (domainName.endsWith('blockscout.com')) {
+  if (domainName === 'blockscout.com' || domainName.endsWith('.blockscout.com')) {
     $('.js-ad-dependant-mb-2').addClass('mb-2')
     $('.js-ad-dependant-mb-3').addClass('mb-3')
     $('.js-ad-dependant-mb-5-reverse').removeClass('mb-5')

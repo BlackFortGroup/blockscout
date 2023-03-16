@@ -8,6 +8,7 @@ defmodule BlockScoutWeb.Notifier do
   alias BlockScoutWeb.{
     AddressContractVerificationViaFlattenedCodeView,
     AddressContractVerificationViaJsonView,
+    AddressContractVerificationViaMultiPartFilesView,
     AddressContractVerificationViaStandardJsonInputView,
     AddressContractVerificationVyperView,
     Endpoint
@@ -45,6 +46,18 @@ defmodule BlockScoutWeb.Notifier do
   def handle_event({:chain_event, :address_current_token_balances, type, address_current_token_balances})
       when type in [:realtime, :on_demand] do
     Enum.each(address_current_token_balances, &broadcast_address_token_balance/1)
+  end
+
+  def handle_event(
+        {:chain_event, :contract_verification_result, :on_demand, {address_hash, contract_verification_result}}
+      ) do
+    Endpoint.broadcast(
+      "addresses:#{address_hash}",
+      "verification_result",
+      %{
+        result: contract_verification_result
+      }
+    )
   end
 
   def handle_event(
@@ -123,6 +136,13 @@ defmodule BlockScoutWeb.Notifier do
     })
   end
 
+  def handle_event(
+        {:chain_event, :internal_transactions, :on_demand,
+         [%InternalTransaction{index: 0, transaction_hash: transaction_hash}]}
+      ) do
+    Endpoint.broadcast("transactions:#{transaction_hash}", "raw_trace", %{raw_trace_origin: transaction_hash})
+  end
+
   def handle_event({:chain_event, :internal_transactions, :realtime, internal_transactions}) do
     internal_transactions
     |> Stream.map(
@@ -183,7 +203,7 @@ defmodule BlockScoutWeb.Notifier do
     today = Date.utc_today()
 
     [{:history_size, history_size}] =
-      Application.get_env(:block_scout_web, BlockScoutWeb.Chain.TransactionHistoryChartController, 30)
+      Application.get_env(:block_scout_web, BlockScoutWeb.Chain.TransactionHistoryChartController, {:history_size, 30})
 
     x_days_back = Date.add(today, -1 * history_size)
 
@@ -191,6 +211,18 @@ defmodule BlockScoutWeb.Notifier do
     stats = Enum.map(date_range, fn item -> Map.drop(item, [:__meta__]) end)
 
     Endpoint.broadcast("transactions:stats", "update", %{stats: stats})
+  end
+
+  def handle_event(
+        {:chain_event, :token_total_supply, :on_demand,
+         [%Explorer.Chain.Token{contract_address_hash: contract_address_hash, total_supply: total_supply} = token]}
+      )
+      when not is_nil(total_supply) do
+    Endpoint.broadcast("tokens:#{to_string(contract_address_hash)}", "token_total_supply", %{token: token})
+  end
+
+  def handle_event({:chain_event, :changed_bytecode, :on_demand, [address_hash]}) do
+    Endpoint.broadcast("addresses:#{to_string(address_hash)}", "changed_bytecode", %{})
   end
 
   def handle_event(_), do: nil
@@ -206,14 +238,13 @@ defmodule BlockScoutWeb.Notifier do
   end
 
   def select_contract_type_and_form_view(params) do
-    verification_from_metadata_json? =
-      Map.has_key?(params, "verification_type") && Map.get(params, "verification_type") == "json:metadata"
+    verification_from_metadata_json? = check_verification_type(params, "json:metadata")
 
-    verification_from_standard_json_input? =
-      Map.has_key?(params, "verification_type") && Map.get(params, "verification_type") == "json:standard"
+    verification_from_standard_json_input? = check_verification_type(params, "json:standard")
 
-    verification_from_vyper? =
-      Map.has_key?(params, "verification_type") && Map.get(params, "verification_type") == "vyper"
+    verification_from_vyper? = check_verification_type(params, "vyper")
+
+    verification_from_multi_part_files? = check_verification_type(params, "multi-part-files")
 
     compiler = if verification_from_vyper?, do: :vyper, else: :solc
 
@@ -222,17 +253,31 @@ defmodule BlockScoutWeb.Notifier do
         verification_from_standard_json_input? -> AddressContractVerificationViaStandardJsonInputView
         verification_from_metadata_json? -> AddressContractVerificationViaJsonView
         verification_from_vyper? -> AddressContractVerificationVyperView
+        verification_from_multi_part_files? -> AddressContractVerificationViaMultiPartFilesView
         true -> AddressContractVerificationViaFlattenedCodeView
       end
 
     %{view: view, compiler: compiler}
   end
 
+  defp check_verification_type(params, type),
+    do: Map.has_key?(params, "verification_type") && Map.get(params, "verification_type") == type
+
   @doc """
   Broadcast the percentage of blocks indexed so far.
   """
   def broadcast_blocks_indexed_ratio(ratio, finished?) do
     Endpoint.broadcast("blocks:indexing", "index_status", %{
+      ratio: Decimal.to_string(ratio),
+      finished: finished?
+    })
+  end
+
+  @doc """
+  Broadcast the percentage of pending block operations indexed so far.
+  """
+  def broadcast_internal_transactions_indexed_ratio(ratio, finished?) do
+    Endpoint.broadcast("blocks:indexing_internal_transactions", "index_status", %{
       ratio: Decimal.to_string(ratio),
       finished: finished?
     })
@@ -367,8 +412,6 @@ defmodule BlockScoutWeb.Notifier do
   end
 
   defp broadcast_token_transfer(token_transfer, event) do
-    Endpoint.broadcast("token_transfers:#{token_transfer.transaction_hash}", event, %{})
-
     Endpoint.broadcast("addresses:#{token_transfer.from_address_hash}", event, %{
       address: token_transfer.from_address,
       token_transfer: token_transfer

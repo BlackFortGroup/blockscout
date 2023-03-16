@@ -11,7 +11,7 @@ defmodule Explorer.Chain.Cache.GasUsage do
     ]
 
   @default_cache_period :timer.hours(2)
-  config = Application.get_env(:explorer, __MODULE__)
+  config = Application.compile_env(:explorer, __MODULE__)
   @enabled Keyword.get(config, :enabled)
 
   use Explorer.Chain.MapCache,
@@ -19,7 +19,7 @@ defmodule Explorer.Chain.Cache.GasUsage do
     key: :sum,
     key: :async_task,
     global_ttl: cache_period(),
-    ttl_check_interval: :timer.minutes(15),
+    ttl_check_interval: :timer.seconds(1),
     callback: &async_task_on_deletion(&1)
 
   alias Explorer.Chain.Transaction
@@ -57,7 +57,8 @@ defmodule Explorer.Chain.Cache.GasUsage do
           rescue
             e ->
               Logger.debug([
-                "Coudn't update gas used sum test #{inspect(e)}"
+                "Couldn't update gas used sum: ",
+                Exception.format(:error, e, __STACKTRACE__)
               ])
           end
 
